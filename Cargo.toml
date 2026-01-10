@@ -1,0 +1,14 @@
+[package]
+name = "bf-jit"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iced-x86 = { version = "1.21.0", default-features = false, features = ["std", "encoder", "code_asm"] }
+libloading = "0.9.0"
+memmap2 = "0.9.9"
+windows-sys = "0.61.2"
+
+[profile.dev]
+opt-level = 0
+debug = true
