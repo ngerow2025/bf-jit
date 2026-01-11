@@ -1,6 +1,7 @@
 use iced_x86::code_asm::CodeAssembler;
 use iced_x86::code_asm::*;
 use libloading::Library;
+use windows_sys::Win32::{Storage::FileSystem::{ReadFile, WriteFile}, System::{Console::{ENABLE_PROCESSED_INPUT, GetStdHandle, STD_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleMode}, IO::OVERLAPPED}};
 
 fn main() -> Result<(), IcedError> {
     let mut program = compile_bf()?;
@@ -162,6 +163,11 @@ fn compile_bf() -> Result<CodeAssembler, IcedError> {
     // use windows_sys crate to use the functions like GetStdHandle to get the handles for stdin and stdout
     // then we can embed those handles as constants in the JIT code for use in the ReadFile and WriteFile calls
 
+    let raw_write_file_ptr: u64;
+    let raw_stdout_handle: u64;
+    let raw_stdin_handle: u64;
+
+
     unsafe {
         let lib = Library::new("kernel32.dll").unwrap();
         let write_file_sym: libloading::Symbol<
@@ -174,7 +180,38 @@ fn compile_bf() -> Result<CodeAssembler, IcedError> {
             ) -> i32,
         > = lib.get(b"WriteFile").unwrap();
 
-        let raw = write_file_sym.try_as_raw_ptr().unwrap() as usize;
+        raw_write_file_ptr = write_file_sym.try_as_raw_ptr().unwrap().addr() as u64;
+
+        let stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        let stdin_handle = GetStdHandle(STD_INPUT_HANDLE);
+
+        raw_stdout_handle = stdout_handle.addr() as u64;
+        raw_stdin_handle = stdin_handle.addr() as u64;
+
+
+        SetConsoleMode(stdin_handle, ENABLE_PROCESSED_INPUT);
+
+        // print_char("i".as_ptr());
+
+        // let output_str = "n".as_ptr();
+        // WriteFile(stdout_handle, output_str, 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
+        // let output_str = ":".as_ptr();
+        // WriteFile(stdout_handle, output_str, 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
+        // let output_str = "\n".as_ptr();
+        // WriteFile(stdout_handle, output_str, 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
+
+        // let mut input_buffer = Vec::<u8>::new();
+        // input_buffer.push(0);
+        // input_buffer.as_mut_ptr();
+
+        // ReadFile(stdin_handle, input_buffer.as_mut_ptr(), 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
+        // WriteFile(stdout_handle, input_buffer.as_mut_ptr(), 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
+        
+
+        // println!("\nread this input: {:?}", input_buffer);
+        
+
+        
     }
 
 
@@ -183,6 +220,10 @@ fn compile_bf() -> Result<CodeAssembler, IcedError> {
     let tape_size = 30;
     //make sure to save some registers and allocate stack space for the tape
     program.push(rbx)?;
+    program.push(rax)?;
+    program.push(rdi)?;
+    program.push(rsi)?;
+    program.push(rdx)?;
     program.sub(rsp, tape_size)?;
 
     //now zero out the tape memory
@@ -208,12 +249,33 @@ fn compile_bf() -> Result<CodeAssembler, IcedError> {
                 program.dec(byte_ptr(rbx))?;
             }
             BfInstruction::Output => {
-                //syscall write(1, rbx, 1)
-                program.mov(rax, 1u64)?; //sys_write
-                program.mov(rdi, 1u64)?; //stdout
-                program.mov(rsi, rbx)?; //data pointer
-                program.mov(rdx, 1u64)?; //length
-                program.syscall()?;
+                #[cfg(target_os = "windows")]
+                {
+                    //call WriteFile(stdout_handle, char, 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
+
+                    //from left to right the params are going into the following registers:
+                    //RCX: stdout_handle
+                    //RDX: char*
+                    //R8: 1
+                    //R9: 0
+                    //push 0
+                    program.mov(rcx, raw_stdout_handle)?;
+                    program.mov(rdx, rbx)?; //data pointer
+                    program.mov(r8, 1u64)?; //length
+                    program.mov(r9, 0u64)?; //written
+                    program.push(0u32)?; //overlapped
+
+                    program.call(raw_write_file_ptr)?;
+                }
+                #[cfg(target_os = "linux")]
+                {
+                    //syscall write(1, rbx, 1)
+                    program.mov(rax, 1u64)?; //sys_write
+                    program.mov(rdi, 1u64)?; //stdout
+                    program.mov(rsi, rbx)?; //data pointer
+                    program.mov(rdx, 1u64)?; //length
+                    program.syscall()?;
+                }
             }
             BfInstruction::Input => {
                 //syscall read(0, rbx, 1)
@@ -251,10 +313,18 @@ fn compile_bf() -> Result<CodeAssembler, IcedError> {
 
     //now restore the registers and stack before returning
     // do the inverse of these operations:
-        // program.push(rbx)?;
-        // program.sub(rsp, tape_size)?;
+    // program.push(rbx)?;
+    // program.push(rax)?;
+    // program.push(rdi)?;
+    // program.push(rsi)?;
+    // program.push(rdx)?;
+    // program.sub(rsp, tape_size)?;
 
     program.add(rsp, tape_size)?;
+    program.pop(rdx)?;
+    program.pop(rsi)?;
+    program.pop(rdi)?;
+    program.pop(rax)?;
     program.pop(rbx)?;
     
     //now return
@@ -273,4 +343,11 @@ enum BfInstruction {
     Input,
     LoopStart,
     LoopEnd,
+}
+
+pub unsafe extern "C" fn print_char(char: *const u8) {
+    unsafe {
+        let stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
+        WriteFile(stdout_handle, char, 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
+    }
 }
