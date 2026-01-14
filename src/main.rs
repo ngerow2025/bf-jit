@@ -263,9 +263,11 @@ fn compile_bf() -> Result<CodeAssembler, IcedError> {
                     program.mov(rdx, rbx)?; //data pointer
                     program.mov(r8, 1u64)?; //length
                     program.mov(r9, 0u64)?; //written
-                    program.push(0u32)?; //overlapped
+                    program.sub(rsp, 40)?; //alignment, shadow space, and arg space
+                    program.mov(qword_ptr(rsp + 32), r9)?; //overlapped
 
                     program.call(raw_write_file_ptr)?;
+                    program.add(rsp, 40)?; //clean up the stack
                 }
                 #[cfg(target_os = "linux")]
                 {
@@ -343,11 +345,4 @@ enum BfInstruction {
     Input,
     LoopStart,
     LoopEnd,
-}
-
-pub unsafe extern "C" fn print_char(char: *const u8) {
-    unsafe {
-        let stdout_handle = GetStdHandle(STD_OUTPUT_HANDLE);
-        WriteFile(stdout_handle, char, 1, 0 as *mut u32, 0 as *mut OVERLAPPED);
-    }
 }
